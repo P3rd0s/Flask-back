@@ -7,5 +7,7 @@ COPY requirements.txt /usr/src/app/FlaskBack
 RUN pip install -r /usr/src/app/FlaskBack/requirements.txt
 COPY . /usr/src/app/FlaskBack
 
+ENV REDIS=REDIS
+
 EXPOSE 5000
 CMD ["python3", "app.py"]

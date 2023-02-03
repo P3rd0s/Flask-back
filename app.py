@@ -1,8 +1,10 @@
+import os
+
 import redis
 from flask import Flask, request
 
 app = Flask(__name__)
-redis = redis.Redis(host="localhost", decode_responses=True)
+redis = redis.Redis(host=os.environ.get('REDIS', 'localhost'), decode_responses=True)
 
 
 def to_json(iocs_array):
