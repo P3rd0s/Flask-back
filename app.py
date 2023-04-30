@@ -1,10 +1,18 @@
+import base64
+import io
 import os
 
 import redis
-from flask import Flask, request
+import psycopg2
+from flask import Flask, request, send_file
 
 app = Flask(__name__)
 redis = redis.Redis(host=os.environ.get('REDIS', 'localhost'), decode_responses=True)
+postgres_storage = psycopg2.connect(
+    host=os.environ.get('POSTGRES', 'localhost'),
+    database=os.environ.get('POSTGRES_DB', 'articlesdb'),
+    user=os.environ.get('POSTGRES_USER', 'iocsfinder'),
+    password=os.environ.get('POSTGRES_PASSWORD', 'strongHeavyPassword4thisdb'))
 
 
 def to_json(iocs_array):
@@ -15,6 +23,32 @@ def to_json(iocs_array):
             obj[ioc_fields[i-1]] = ioc_fields[i]
         objects.append(obj)
     return objects
+
+
+def is_sha1(maybe_sha):
+    if len(maybe_sha) != 40:
+        return False
+    try:
+        sha_int = int(maybe_sha, 16)
+    except ValueError:
+        return False
+    return True
+
+
+def get_from_postgres(article_id: str):
+    if not is_sha1(article_id):
+        return {'error': 'Wrong article id'}
+
+    cursor = postgres_storage.cursor()
+    table = os.environ.get('POSTGRES_TABLE', 'articles')
+
+    cursor.execute(f'''SELECT * FROM {table} WHERE article_id=%s''', (str(article_id), ))
+
+    fetch = cursor.fetchone()[1]
+    if not fetch:
+        return {'error': 'Article with given id was not found'}
+
+    return base64.b64decode(fetch)
 
 
 @app.route('/api/iocs/getAll')
@@ -105,6 +139,28 @@ def get_by_id():
     ioc = redis.hgetall('ioc:id:' + ioc_id)
     article = redis.hgetall('articles:' + ioc['article_hash'])
     return {'ioc': ioc, 'article': article}
+
+
+@app.route('/api/articles/loadById')
+def load_article_by_id():
+    article = get_from_postgres(request.args.get('id'))
+
+    if type(article) is bytes:
+        if article[:4] != b'%PDF':
+            return {'error': 'Wrong file type'}
+        binary = io.BytesIO(article)
+        return send_file(binary, download_name='report.pdf')
+
+    return article
+
+
+@app.route('/api/articles/getById')
+def get_article_by_id():
+    article = get_from_postgres(request.args.get('id'))
+
+    if type(article) is bytes:
+        return {'article': article.decode()}
+    return article
 
 
 app.run(debug=True, host='0.0.0.0')
