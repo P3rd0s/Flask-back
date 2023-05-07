@@ -106,7 +106,21 @@ def get_by_month():
 def get_by_query():
     value = str(request.args.get('query'))
 
-    return to_json(redis.fcall('get_by_value', 0, value))
+    cursor = postgres_storage.cursor()
+    table = os.environ.get('POSTGRES_TABLE', 'articles')
+    sentence_regex = '([A-Z][^\\.!?]*?' + value + '[^\n\\.!?]*[\\.!?\n]\\d*)'
+
+    cursor.execute(f'''SELECT article_id, regexp_substr(article_text, %s, 1, 1, 'i') FROM {table} WHERE article_text ILIKE %s''', (sentence_regex, '%' + value + '%', ))
+
+    fetch = cursor.fetchall()
+
+    response = to_json(redis.fcall('get_by_value', 0, value))
+    response.extend(map(lambda match: {
+        'article_hash': match[0],
+        'iocs_paragraph': match[1]
+    }, fetch))
+
+    return response
 
 
 @app.route('/api/iocs/getByType')
@@ -141,9 +155,31 @@ def get_by_id():
     return {'ioc': ioc, 'article': article}
 
 
-@app.route('/api/articles/loadById')
-def load_article_by_id():
-    article = get_from_postgres(request.args.get('id'))
+@app.route('/api/articles/getById')
+def get_article_by_id():
+    article_id = request.args.get('id')
+
+    article = redis.hgetall('articles:' + article_id)
+    return article
+
+
+@app.route('/api/articles/loadDataById')
+def load_article_pdf_by_id():
+    article_id = request.args.get('id')
+
+    if not is_sha1(article_id):
+        return {'error': 'Wrong article id'}
+
+    cursor = postgres_storage.cursor()
+    table = os.environ.get('POSTGRES_TABLE', 'articles')
+
+    cursor.execute(f'''SELECT article_data FROM {table} WHERE article_id=%s''', (str(article_id), ))
+
+    fetch = cursor.fetchone()[0]
+    if not fetch:
+        return {'error': 'Article with given id was not found'}
+
+    article = base64.b64decode(fetch)
 
     if type(article) is bytes:
         if article[:4] != b'%PDF':
@@ -154,13 +190,23 @@ def load_article_by_id():
     return article
 
 
-@app.route('/api/articles/getById')
-def get_article_by_id():
-    article = get_from_postgres(request.args.get('id'))
+@app.route('/api/articles/getDataById')
+def get_article_content_by_id():
+    article_id = request.args.get('id')
 
-    if type(article) is bytes:
-        return {'article': article.decode()}
-    return article
+    if not is_sha1(article_id):
+        return {'error': 'Wrong article id'}
+
+    cursor = postgres_storage.cursor()
+    table = os.environ.get('POSTGRES_TABLE', 'articles')
+
+    cursor.execute(f'''SELECT article_text FROM {table} WHERE article_id=%s''', (str(article_id), ))
+
+    article = cursor.fetchone()[0]
+    if not article:
+        return {'error': 'Article with given id was not found'}
+
+    return {'article': article}
 
 
 app.run(debug=True, host='0.0.0.0')
